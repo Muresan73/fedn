@@ -1,3 +1,4 @@
+from typing import Any
 from fedn.clients.reducer.state import ReducerStateToString, StringToReducerState
 from fedn.common.storage.db.mongo import connect_to_mongodb
 from .reducerstatestore import ReducerStateStore
@@ -25,7 +26,7 @@ class MongoReducerStateStore(ReducerStateStore):
             # Control 
             self.control = self.mdb['control']
             self.control_config = self.control['config']
-            self.state = self.control['state']
+            self.control_state = self.control['state']
             self.model = self.control['model']
             self.round = self.control["round"]
 
@@ -38,12 +39,12 @@ class MongoReducerStateStore(ReducerStateStore):
             self.__inited = True
         except Exception as e:
             print("FAILED TO CONNECT TO MONGO, {}".format(e), flush=True)
-            self.state = None
-            self.model = None
-            self.control = None
-            self.network = None
-            self.combiners = None
-            self.clients = None
+            self.control_state : Any = None
+            self.model : Any = None
+            self.control : Any = None
+            self.network : Any = None
+            self.combiners : Any = None
+            self.clients : Any = None
             raise
 
         import yaml
@@ -121,7 +122,7 @@ class MongoReducerStateStore(ReducerStateStore):
 
         :return:
         """
-        return StringToReducerState(self.state.find_one()['current_state'])
+        return StringToReducerState(self.control_state.find_one()['current_state'])
 
     def transition(self, state):
         """
@@ -129,9 +130,9 @@ class MongoReducerStateStore(ReducerStateStore):
         :param state:
         :return:
         """
-        old_state = self.state.find_one({'state': 'current_state'})
+        old_state = self.control_state.find_one({'state': 'current_state'})
         if old_state != state:
-            return self.state.update_one({'state': 'current_state'}, {'$set': {'state': ReducerStateToString(state)}}, True)
+            return self.control_state.update_one({'state': 'current_state'}, {'$set': {'state': ReducerStateToString(state)}}, True)
         else:
             print("Not updating state, already in {}".format(ReducerStateToString(state)))
 
@@ -374,7 +375,7 @@ class MongoReducerStateStore(ReducerStateStore):
     def drop_control(self):
         """ """
         # Control 
-        self.state.drop()
+        self.control_state.drop()
         self.control_config.drop()
         self.control.drop()
 

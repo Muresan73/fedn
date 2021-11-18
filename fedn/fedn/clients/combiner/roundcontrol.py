@@ -58,6 +58,32 @@ class RoundControl:
             self.server.report_status("ROUNDCONTROL: Failed to push round config.", flush=True)
             raise
         return round_config['_job_id']
+
+    async def push_round_config_async(self, round_config):
+        """ Recieve a round_config (job description) and push on the queue. 
+            After the round is finished returns True
+
+        :param round_config: A dict containing round configurations.
+        :type round_config: dict
+        :return: A generated job id (universally unique identifier) for the round configuration 
+        :rtype: str
+        """
+        import asyncio
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()                  
+        done = lambda:future.get_loop().call_soon_threadsafe(future.set_result, True)
+        print("put task in queue")
+        try:
+            import uuid
+            round_config['_job_id'] = str(uuid.uuid4())
+            self.round_configs.put((round_config,done))
+            print("task in the queue")
+            await future
+
+        except:
+            self.server.report_status("ROUNDCONTROL: Failed to push round config.", flush=True)
+            raise
+        return round_config['_job_id']
         
     def load_model_fault_tolerant(self, model_id, retry=3):
         """Load model update object.
@@ -285,26 +311,32 @@ class RoundControl:
         """
         try:
             while True:
-                try:
-                    round_config = self.round_configs.get(block=False)
-
-                    ready = self.__check_nr_round_clients(round_config)
-                    if ready:
-                        if round_config['task'] == 'training':
-                            tic = time.time()
-                            round_meta = self.execute_training(round_config)
-                            round_meta['time_exec_training'] = time.time() - tic
-                            round_meta['name'] = self.id
-                            self.server.tracer.set_round_meta(round_meta)
-                        elif round_config['task'] == 'validation':
-                            self.execute_validation(round_config)
+                if not self.round_configs.empty():
+                    config = self.round_configs.get(block=False)
+                    (round_config,done) = config if type(config) is tuple else (config,lambda:None)
+                    try:
+                        ready = self.__check_nr_round_clients(round_config)
+                        if ready:
+                            if round_config['task'] == 'training':
+                                tic = time.time()
+                                round_meta = self.execute_training(round_config)
+                                round_meta['time_exec_training'] = time.time() - tic
+                                round_meta['name'] = self.id
+                                self.server.tracer.set_round_meta(round_meta)
+                            elif round_config['task'] == 'validation':
+                                self.execute_validation(round_config)
+                            else:
+                                self.server.report_status("ROUNDCONTROL: Round config contains unkown task type.", flush=True)
                         else:
-                            self.server.report_status("ROUNDCONTROL: Round config contains unkown task type.", flush=True)
-                    else:
-                        self.server.report_status("ROUNDCONTROL: Failed to meet client allocation requirements for this round config.", flush=True)
-
-                except queue.Empty:
+                            self.server.report_status("ROUNDCONTROL: Failed to meet client allocation requirements for this round config.", flush=True)
+                        done()
+                    except:
+                        print("error during round: abort")
+                        done()
+                else:
                     time.sleep(1)
+
+
 
         except (KeyboardInterrupt, SystemExit):
             pass

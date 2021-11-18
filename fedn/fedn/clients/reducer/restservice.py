@@ -3,6 +3,11 @@ from fedn.clients.reducer.interfaces import CombinerInterface
 from fedn.clients.reducer.state import ReducerState, ReducerStateToString
 from idna import check_initial_combiner
 from tenacity import retry
+from fedn.clients.reducer.state import ReducerState, ReducerStateToString
+from fedn.clients.reducer.abstract_control import AbstractReducerControl
+from fedn.clients.reducer.control import ReducerControl
+
+from flask_wtf.csrf import CSRFProtect
 from werkzeug.utils import secure_filename
 
 from flask import Flask, jsonify, render_template, request
@@ -81,7 +86,7 @@ class ReducerRestService:
 
     """
 
-    def __init__(self, config, control, certificate_manager, certificate=None):
+    def __init__(self, config, control:ReducerControl, certificate_manager, certificate=None):
 
         print("config object!: \n\n\n\n{}".format(config))
         if config['discover_host']:
@@ -113,6 +118,8 @@ class ReducerRestService:
         self.certificate = certificate
         self.certificate_manager = certificate_manager
         self.current_compute_context = None  # self.control.get_compute_context()
+
+        self.hierarchical_edges = {}
 
     def to_dict(self):
         """
@@ -185,6 +192,7 @@ class ReducerRestService:
         Check if initial model has been configured, otherwise render setup_model template.
         :return: Rendered html template or None
         """
+
         if not self.check_compute_context():
             return render_template('setup.html', client=self.name, state=ReducerStateToString(self.control.state()),
                                    logs=None, refresh=False,
@@ -239,16 +247,14 @@ class ReducerRestService:
         def index():
             """
 
-            :return:
+            :return: 
             """
             not_configured = self.check_configured()
             if not_configured:
                 return not_configured
-            events = self.control.get_events()
             message = request.args.get('message', None)
             message_type = request.args.get('message_type', None)
-            return render_template('events.html', client=self.name, state=ReducerStateToString(self.control.state()),
-                                   events=events,
+            return render_template('events.html', client=self.name,
                                    logs=None, refresh=True, configured=True, message=message, message_type=message_type)
 
         # http://localhost:8090/add?name=combiner&address=combiner&port=12080&token=e9a3cb4c5eaff546eec33ff68a7fbe232b68a192
@@ -256,7 +262,7 @@ class ReducerRestService:
         def status():
             """
 
-            :return:
+            :return: 
             """
             return {'state': ReducerStateToString(self.control.state())}
 
@@ -279,7 +285,7 @@ class ReducerRestService:
                 "type": 'reducer',
             })
             
-            combiner_info = combiner_status()
+            combiner_info = self.control.combiner_status()
             client_info = client_status()
 
             if len(combiner_info) < 1:
@@ -317,13 +323,16 @@ class ReducerRestService:
             for node in result['nodes']:
                 try:
                     if node['type'] == 'combiner':
-                        result['edges'].append(
+                        if len(self.hierarchical_edges) > 0:
+                            pass
+                        else: result['edges'].append(
                             {
                                 "id": "e{}".format(count),
                                 "source": node['id'],
                                 "target": 'reducer',
                             }
                         )
+                        
                     elif node['type'] == 'client':
                         result['edges'].append(
                             {
@@ -341,7 +350,7 @@ class ReducerRestService:
         def network_graph():
             from bokeh.embed import json_item
             try:
-                plot = Plot(self.control.statestore)
+                plot = Plot(self.control.statestore) #TODO! bridge statestore
                 result = netgraph()
                 df_nodes = pd.DataFrame(result['nodes'])
                 df_edges = pd.DataFrame(result['edges'])
@@ -367,6 +376,16 @@ class ReducerRestService:
             json_docs.reverse()
             return {'events': json_docs}
 
+        @app.route('/supervisor', methods=['GET','POST'])
+        def supervisor():
+            return None
+            # authorize(request, self.token)
+            body = request.get_json( )
+            supervisor_node = body.get('supervisor')
+            supervised_combiners = body.get('worker')
+
+            self.hierarchical_edges.update({combiner:supervisor_node for combiner in supervised_combiners})
+
         @app.route('/add')
         def add():
             """ Add a combiner to the network. """
@@ -385,31 +404,7 @@ class ReducerRestService:
             if port is None or address is None or name is None:
                 return "Please specify correct parameters."
 
-            # Try to retrieve combiner from db
-            combiner = self.control.network.get_combiner(name)
-            if not combiner:
-                # Create a new combiner
-                import base64
-                certificate, key = self.certificate_manager.get_or_create(address).get_keypair_raw()
-                cert_b64 = base64.b64encode(certificate)
-                key_b64 = base64.b64encode(key)
-
-                # TODO append and redirect to index.
-                import copy
-                combiner = CombinerInterface(self, name, address, port, copy.deepcopy(certificate), copy.deepcopy(key),
-                                             request.remote_addr)
-                self.control.network.add_combiner(combiner)
-
-            combiner = self.control.network.get_combiner(name)
-
-            ret = {
-                'status': 'added',
-                'certificate': combiner['certificate'],
-                'key': combiner['key'],
-                'storage': self.control.statestore.get_storage_backend(),
-                'statestore': self.control.statestore.get_config(),
-            }
-
+            ret = self.control.add_combiner(name,address,port,request.remote_addr,self.certificate_manager,self.name)
             return jsonify(ret)
 
         @app.route('/eula', methods=['GET', 'POST'])
@@ -445,11 +440,9 @@ class ReducerRestService:
                 not_configured = self.check_configured()
                 if not_configured:
                     return not_configured
-                h_latest_model_id = self.control.get_latest_model()
 
                 model_info = self.control.get_model_info()
-                return render_template('models.html', h_latest_model_id=h_latest_model_id, seed=True,
-                                       model_info=model_info, configured=True)
+                return render_template('models.html', model_info=model_info, seed=True, configured=True)
 
             seed = True
             return redirect(url_for('models', seed=seed))
@@ -461,16 +454,7 @@ class ReducerRestService:
             :return:
             """
             if request.method == 'POST':
-                from fedn.common.tracer.mongotracer import MongoTracer
-                statestore_config = self.control.statestore.get_config()
-                self.tracer = MongoTracer(statestore_config['mongo_config'], statestore_config['network_id'])
-                try:
-                    self.control.drop_models()
-                except:
-                    pass
-
-                # drop objects in minio
-                self.control.delete_bucket_objects()
+                self.control.delete_model_trail()
                 return redirect(url_for('models'))
             seed = True
             return redirect(url_for('models', seed=seed))
@@ -482,7 +466,7 @@ class ReducerRestService:
             :return:
             """
             if request.method == 'POST':
-                self.control.statestore.drop_control()
+                self.control.drop_control()
                 return redirect(url_for('control'))
             return redirect(url_for('control'))
 
@@ -498,6 +482,7 @@ class ReducerRestService:
             state = ReducerStateToString(self.control.state())
             logs = None
             refresh = True
+            available_combiners = [combiner.name for combiner in self.control.network.get_combiners()]
 
             if self.remote_compute_context:
                 try:
@@ -511,11 +496,13 @@ class ReducerRestService:
                     url_for('index', state=state, refresh=refresh, message="Reducer is in monitoring state"))
 
             if request.method == 'POST':
+                self.hierarchical_edges = {}
                 timeout = float(request.form.get('timeout', 180))
                 rounds = int(request.form.get('rounds', 1))
                 task = (request.form.get('task', ''))
                 clients_required = request.form.get('clients_required', 1)
                 clients_requested = request.form.get('clients_requested', 8)
+                executor_combiner = request.form.get('executor_combiner')
 
                 # checking if there are enough clients connected to start!
                 clients_available = 0
@@ -536,19 +523,19 @@ class ReducerRestService:
                 validate = request.form.get('validate', False)
                 if validate == 'False':
                     validate = False
+                else:
+                    validate = True
                 helper_type = request.form.get('helper', 'keras')
-                # self.control.statestore.set_framework(helper_type)
 
                 latest_model_id = self.control.get_latest_model()
 
                 config = {'round_timeout': timeout, 'model_id': latest_model_id,
                           'rounds': rounds, 'clients_required': clients_required,
                           'clients_requested': clients_requested, 'task': task,
-                          'validate': validate, 'helper_type': helper_type}
+                          'validate': validate, 'helper_type': helper_type,"executor_combiner": executor_combiner}
+                
+                self.control.start(config)
 
-                import threading
-                threading.Thread(target=self.control.instruct, args=(config,)).start()
-                # self.control.instruct(config)
                 return redirect(url_for('index', state=state, refresh=refresh, message="Sent execution plan.",
                                         message_type='SUCCESS'))
 
@@ -564,14 +551,8 @@ class ReducerRestService:
                 return render_template('index.html', latest_model_id=latest_model_id,
                                        compute_package=self.current_compute_context,
                                        seed_model_id=seed_model_id,
-                                       helper=self.control.statestore.get_framework(), validate=True, configured=True)
-
-            client = self.name
-            state = ReducerStateToString(self.control.state())
-            logs = None
-            refresh = False
-            return render_template('index.html', client=client, state=state, logs=logs, refresh=refresh,
-                                   configured=True)
+                                       available_combiners=available_combiners,
+                                       helper=self.control.get_framework(), validate=True, configured=True)
 
         @app.route('/assign')
         def assign():
@@ -587,6 +568,7 @@ class ReducerRestService:
 
             name = request.args.get('name', None)
             combiner_preferred = request.args.get('combiner', None)
+            remote_address = request.remote_addr
 
             if combiner_preferred:
                 combiner = self.control.find(combiner_preferred)
@@ -624,43 +606,13 @@ class ReducerRestService:
 
             return jsonify(response)
 
-        @app.route('/infer')
-        def infer():
-            """
-
-            :return:
-            """
-            if self.control.state() == ReducerState.setup:
-                return "Error, not configured"
-            result = ""
-            try:
-                self.control.set_model_id()
-            except fedn.exceptions.ModelError:
-                print("Failed to seed control.")
-
-            return result
-
-        def combiner_status():
-            """ Get current status reports from all combiners registered in the network. 
-
-            :return:
-            """
-            combiner_info = []
-            for combiner in self.control.network.get_combiners():
-                try:
-                    report = combiner.report()
-                    combiner_info.append(report)
-                except:
-                    pass
-            return combiner_info
-
         def client_status():
             """
             Get current status of clients (available) from DB compared with client status from all combiners,
             update client status to DB and add their roles.
             """
-            client_info = self.control.network.get_client_info()
-            combiner_info = combiner_status()
+            client_info = self.control.get_client_info()
+            combiner_info = self.control.combiner_status()
             try:
                 all_active_trainers = []
                 all_active_validators = []
@@ -680,7 +632,7 @@ class ReducerRestService:
                 for client in all_clients:
                     status = 'offline'
                     role = 'None'
-                    self.control.network.update_client_data(client, status, role)
+                    self.control.update_client_data(client, status, role)
 
                 all_active_clients = active_validators_list + active_trainers_list
                 for client in all_active_clients:
@@ -693,14 +645,14 @@ class ReducerRestService:
                         role = 'validator'
                     else:
                         role = 'unknown'
-                    self.control.network.update_client_data(client, status, role)
+                    self.control.update_client_data(client, status, role)
 
                 return {'active_clients': all_clients,
                         'active_trainers': active_trainers_list,
                         'active_validators': active_validators_list
                         }
             except:
-                 pass
+                 print("error getting client info")
 
             return {'active_clients': [],
                     'active_trainers': [],
@@ -762,7 +714,7 @@ class ReducerRestService:
             round_time_plot = plot.create_round_plot()
             mem_cpu_plot = plot.create_cpu_plot()
             combiners_plot = plot.create_combiner_plot()
-            combiner_info = combiner_status()
+            combiner_info = self.control.combiner_status()
             active_clients = client_status()
             return render_template('network.html', network_plot=True,
                                    round_time_plot=round_time_plot,
@@ -853,7 +805,7 @@ controller:
                         return "Not allowed to change context while execution is ongoing."
 
                     self.control.set_compute_context(filename, file_path)
-                    self.control.statestore.set_framework(helper_type)
+                    self.control.set_framework(helper_type)
                     return redirect(url_for('control'))
 
             from flask import send_from_directory
@@ -890,7 +842,8 @@ controller:
 
             :return:
             """
-            # sum = ''
+            from flask import jsonify
+
             name = request.args.get('name', None)
             if name == '' or name is None:
                 name = self.control.get_compute_context()
@@ -907,7 +860,6 @@ controller:
                 sum = ''
 
             data = {'checksum': sum}
-            from flask import jsonify
             return jsonify(data)
 
         if self.certificate:

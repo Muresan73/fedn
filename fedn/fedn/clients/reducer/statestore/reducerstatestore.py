@@ -45,3 +45,15 @@ class ReducerStateStore(ABC):
 
         """
         pass
+    
+    # rest-service dependecy
+
+    @abstractmethod
+    def get_config(self):
+        '''
+        return dict 
+        'type, mongo_config, network_id'
+
+        needed for plotinh
+        '''
+        pass

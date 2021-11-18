@@ -197,11 +197,25 @@ message ReportResponse {
   repeated Parameter parameter = 2;
 }
 
+message InstructConfig {
+  double round_timeout = 1;
+  string model_id = 2;
+  uint32 rounds = 3;
+  uint32 clients_required = 4;
+  uint32 clients_requested = 5;
+  string task = 6;
+  bool validate = 7;
+  string helper_type = 8;
+}
+
 service Control {
   rpc Start(ControlRequest) returns (ControlResponse);
   rpc Stop(ControlRequest) returns (ControlResponse);
   rpc Configure(ControlRequest) returns (ReportResponse);  
   rpc Report(ControlRequest) returns (ReportResponse);
+  rpc Instruct (InstructConfig) returns (ControlResponse);
+  rpc Book (ControlRequest) returns (ControlResponse);
+  rpc Availability (ControlRequest) returns (ControlResponse);
 }
 
 service Reducer {

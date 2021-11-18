@@ -2,11 +2,18 @@ import copy
 import os
 import tempfile
 import time
+from typing import List
 from datetime import datetime
 
+from fedn.common.tracer.mongotracer import MongoTracer
 from fedn.clients.reducer.interfaces import CombinerUnavailableError
 from fedn.clients.reducer.network import Network
-from fedn.common.tracer.mongotracer import MongoTracer
+from fedn.clients.reducer.abstract_control import AbstractReducerControl
+from fedn.clients.reducer.statestore.mongoreducerstatestore import MongoReducerStateStore
+from fedn.clients.reducer.state import ReducerState
+from fedn.clients.reducer.interfaces import CombinerInterface
+# from fedn.clients.reducer.roundcontrol import RoundControl
+
 import fedn.utils.helpers
 
 from .state import ReducerState
@@ -25,15 +32,15 @@ class ReducerControl:
 
     """
 
-    def __init__(self, statestore):
+    def __init__(self, statestore:MongoReducerStateStore):
 
         self.__state = ReducerState.setup
-        self.statestore = statestore
-        if self.statestore.is_inited():
-            self.network = Network(self, statestore)
+        self._statestore = statestore
+        if self._statestore.is_inited():
+            self._network = Network(self, statestore)
 
         try:
-            config = self.statestore.get_storage_backend()
+            config = self._statestore.get_storage_backend()
         except:
             print("REDUCER CONTROL: Failed to retrive storage configuration, exiting.", flush=True)
             raise MisconfiguredStorageBackend()
@@ -50,21 +57,33 @@ class ReducerControl:
 
         self.client_allocation_policy = self.client_allocation_policy_least_packed
 
-        if self.statestore.is_inited():
+        if self._statestore.is_inited():
             self.__state = ReducerState.idle
+
 
     def get_helper(self):
         """
 
         :return:
         """
-        helper_type = self.statestore.get_framework()
+        helper_type = self._statestore.get_framework()
         helper = fedn.utils.helpers.get_helper(helper_type)
         if not helper:
             print("CONTROL: Unsupported helper type {}, please configure compute_context.helper !".format(helper_type),
                   flush=True)
             return None
         return helper
+
+
+    @property
+    def network(self):
+        return self._network
+        
+    @property
+    def statestore(self):
+        return self._statestore
+    
+    
 
     def delete_bucket_objects(self):
         """
@@ -95,41 +114,41 @@ class ReducerControl:
 
         :return:
         """
-        return self.statestore.get_first()
+        return self._statestore.get_first()
 
     def get_latest_model(self):
         """
 
         :return:
         """
-        return self.statestore.get_latest()
+        return self._statestore.get_latest()
 
     def get_model_info(self):
         """
 
         :return:
         """
-        return self.statestore.get_model_info()
+        return self._statestore.get_model_info()
 
     def get_events(self):
         """
 
         :return:
         """
-        return self.statestore.get_events()
+        return self._statestore.get_events()
 
     def drop_models(self):
         """
 
         """
-        self.statestore.drop_models()
+        self._statestore.drop_models()
 
     def get_compute_context(self):
         """
 
         :return:
         """
-        definition = self.statestore.get_compute_context()
+        definition = self._statestore.get_compute_context()
         if definition:
             try:
                 context = definition['filename']
@@ -143,7 +162,7 @@ class ReducerControl:
     def set_compute_context(self, filename, path):
         """ Persist the configuration for the compute package. """
         self.model_repository.set_compute_context(filename, path)
-        self.statestore.set_compute_context(filename)
+        self._statestore.set_compute_context(filename)
 
     def get_compute_package(self, compute_package=''):
         """
@@ -155,7 +174,7 @@ class ReducerControl:
             compute_package = self.get_compute_context()
         return self.model_repository.get_compute_package(compute_package)
 
-    def commit(self, model_id, model=None):
+    def commit(self, model_id, model):
         """ Commit a model to the global model trail. The model commited becomes the lastest consensus model. """
 
         helper = self.get_helper()
@@ -168,12 +187,12 @@ class ReducerControl:
             print("DONE", flush=True)
             os.unlink(outfile_name)
 
-        self.statestore.set_latest(model_id)
+        self._statestore.set_latest(model_id)
 
     def _out_of_sync(self, combiners=None):
 
         if not combiners:
-            combiners = self.network.get_combiners()
+            combiners = self._network.get_combiners()
 
         osync = []
         for combiner in combiners:
@@ -233,7 +252,7 @@ class ReducerControl:
 
     def _select_round_combiners(self,compute_plan):
         combiners = []
-        for combiner in self.network.get_combiners():
+        for combiner in self._network.get_combiners():
             try:
                 combiner_state = combiner.report()
             except CombinerUnavailableError:
@@ -251,7 +270,7 @@ class ReducerControl:
 
         round_meta = {'round_id': round_number}
 
-        if len(self.network.get_combiners()) < 1:
+        if len(self._network.get_combiners()) < 1:
             print("REDUCER: No combiners connected!")
             return None, round_meta
 
@@ -261,23 +280,23 @@ class ReducerControl:
         compute_plan['round_id'] = round_number
         compute_plan['task'] = 'training'
         compute_plan['model_id'] = self.get_latest_model()
-        compute_plan['helper_type'] = self.statestore.get_framework()
+        compute_plan['helper_type'] = self._statestore.get_framework()
 
         round_meta['compute_plan'] = compute_plan
 
         combiners = []
-        for combiner in self.network.get_combiners():
+        for combiner in self._network.get_combiners():
 
             try:
                 combiner_state = combiner.report()
             except CombinerUnavailableError:
-                self._handle_unavailable_combiner(combiner)
+                self._handle_unavailable_combiner(combiner) # print error
                 combiner_state = None
 
             if combiner_state != None:
                 is_participating = self.check_round_participation_policy(compute_plan, combiner_state)
                 if is_participating:
-                    combiners.append((combiner, compute_plan))
+                    combiners.append(combiner)
 
         round_start = self.check_round_start_policy(combiners)
 
@@ -288,14 +307,15 @@ class ReducerControl:
 
         # 2. Sync up and ask participating combiners to coordinate model updates
         # TODO refactor
-        
-        statestore_config = self.statestore.get_config()
+        from datetime import datetime
+        from fedn.common.tracer.mongotracer import MongoTracer
+        statestore_config = self._statestore.get_config()
 
         self.tracer = MongoTracer(statestore_config['mongo_config'], statestore_config['network_id'])
 
         start_time = datetime.now()
 
-        for combiner, compute_plan in combiners:
+        for combiner in combiners:
             try:
                 self.sync_combiners([combiner], self.get_latest_model())
                 response = combiner.start(compute_plan)
@@ -310,7 +330,7 @@ class ReducerControl:
         # Wait until participating combiners have a model that is out of sync with the current global model.
         # TODO: We do not need to wait until all combiners complete before we start reducing.
         cl = []
-        for combiner, plan in combiners:
+        for combiner in combiners:
             cl.append(combiner)
 
         wait = 0.0
@@ -358,7 +378,11 @@ class ReducerControl:
             tic = time.time()
             import uuid
             model_id = uuid.uuid4()
-            self.commit(model_id, model)
+            try:
+                self.commit(model_id , model)
+            except Exception:
+                print("model commit error")
+
             round_meta['time_commit'] = time.time() - tic
         else:
             print("REDUCER: failed to update model in round with config {}".format(config), flush=True)
@@ -371,7 +395,7 @@ class ReducerControl:
             combiner_config = copy.deepcopy(config)
             combiner_config['model_id'] = self.get_latest_model()
             combiner_config['task'] = 'validation'
-            combiner_config['helper_type'] = self.statestore.get_framework()
+            combiner_config['helper_type'] = self._statestore.get_framework()
 
             validating_combiners = self._select_round_combiners(combiner_config)
 
@@ -417,7 +441,7 @@ class ReducerControl:
 
         # TODO: Refactor
         from fedn.common.tracer.mongotracer import MongoTracer
-        statestore_config = self.statestore.get_config()
+        statestore_config = self._statestore.get_config()
         self.tracer = MongoTracer(statestore_config['mongo_config'], statestore_config['network_id'])
         last_round = self.tracer.get_latest_round()
 
@@ -458,7 +482,7 @@ class ReducerControl:
 
         self.__state = ReducerState.idle
 
-    def reduce(self, combiners):
+    def reduce(self, combiners:List[CombinerInterface]):
         """ Combine current models at Combiner nodes into one global model. """
 
         meta = {}
@@ -476,7 +500,7 @@ class ReducerControl:
                 data = combiner.get_model()
                 meta['time_fetch_model'] += (time.time() - tic)
             except:
-                pass
+                data = None
 
             helper = self.get_helper()
 
@@ -487,7 +511,10 @@ class ReducerControl:
                     model_next = helper.load_model_from_BytesIO(model_str)
                     meta['time_load_model'] += (time.time() - tic)
                     tic = time.time()
-                    model = helper.increment_average(model, model_next, i)
+                    if model:
+                        model = helper.increment_average(model, model_next, i)
+                    else:
+                        model = model_next
                     meta['time_aggregate_model'] += (time.time() - tic)
                 except:
                     tic = time.time()
@@ -510,7 +537,7 @@ class ReducerControl:
             Allocate client to the first available combiner in the combiner list.
             Packs one combiner full before filling up next combiner.
         """
-        for combiner in self.network.get_combiners():
+        for combiner in self._network.get_combiners():
             if combiner.allowing_clients():
                 return combiner
         return None
@@ -526,7 +553,7 @@ class ReducerControl:
         min_clients = None
         selected_combiner = None
 
-        for combiner in self.network.get_combiners():
+        for combiner in self._network.get_combiners():
             try:
                 if combiner.allowing_clients():
                     combiner_state = combiner.report()
@@ -548,7 +575,7 @@ class ReducerControl:
         :param name:
         :return:
         """
-        for combiner in self.network.get_combiners():
+        for combiner in self._network.get_combiners():
             if name == combiner.name:
                 return combiner
         return None
@@ -567,3 +594,116 @@ class ReducerControl:
         :return:
         """
         return self.__state
+
+    def assign_combiner(self,name, combiner_preferred,remote_address):
+        if combiner_preferred:
+            combiner = self.find(combiner_preferred)
+        else:
+            combiner = self.find_available_combiner()
+
+        if combiner is None:
+            return {'status': 'retry',
+                    'msg': "Failed to assign to a combiner, try again later."}
+
+        client = {
+            'name': name,
+            'combiner_preferred': combiner_preferred,
+            'combiner': combiner.name,
+            'ip': remote_address,
+            'status': 'available'
+        }
+        self.network.add_client(client)
+
+        import base64
+        cert_b64 = base64.b64encode(combiner.certificate)
+        response = {
+            'status': 'assigned',
+            'host': combiner.address,
+            'ip': combiner.ip,
+            'port': combiner.port,
+            'certificate': str(cert_b64).split('\'')[1],
+            'model_type': self.statestore.get_framework()
+        }
+
+        return response
+
+
+    def start(self,config):
+        # import threading
+        # threading.Thread(target=self.instruct, args=(config,)).start()
+        # round_control = RoundControl(self._statestore)
+        # threading.Thread(target=round_control.start_with_plan, args=(config,)).start()
+        reducer = self.network.get_combiner(config.get('executor_combiner'))
+        if reducer:
+            config.pop("executor_combiner")
+            self.__state = ReducerState.instructing
+            reducer.instruct(config)
+            self.__state = ReducerState.idle
+        
+    
+    def get_client_info(self):
+        return self.statestore.list_clients()
+
+    def update_client_data(self, client_data, status, role):
+        """ Update client status on DB"""
+        self.statestore.update_client_status(client_data, status, role)
+
+    def add_combiner(self, name, address, port, remote_address,certificate_manager,rest_type): # TODO! certificate_manager ????
+        combiner = self._statestore.get_combiner(name)
+        if not combiner:
+            # Create a new combiner
+            import base64
+            certificate, key = certificate_manager.get_or_create(address).get_keypair_raw()
+            cert_b64 = base64.b64encode(certificate)
+            key_b64 = base64.b64encode(key)
+
+            # TODO append and redirect to index.
+            import copy
+            self.network.add_new_combiner(rest_type, name, address, port, copy.deepcopy(certificate), copy.deepcopy(key),
+                                          remote_address)
+
+
+        ret = {
+            'status': 'added',
+            'certificate': combiner['certificate'],
+            'key': combiner['key'],
+            'storage': self.statestore.get_storage_backend(),
+            'statestore': self.statestore.get_config(),
+        }
+
+        return ret
+
+    def combiner_status(self):
+        """ Get current status reports from all combiners registered in the network. 
+
+        :return:
+        """
+        combiner_info = []
+        for combiner in self.network.get_combiners():
+            try:
+                report = combiner.report()
+                combiner_info.append(report)
+            except:
+                pass
+        return combiner_info
+
+    def drop_control(self):
+        self.statestore.drop_control()
+
+    def delete_model_trail(self):
+        from fedn.common.tracer.mongotracer import MongoTracer
+        statestore_config = self.statestore.get_config()
+        self.tracer = MongoTracer(statestore_config['mongo_config'], statestore_config['network_id'])
+        try:
+            self.drop_models()
+        except:
+            pass
+
+        # drop objects in minio
+        self.delete_bucket_objects()
+
+    def get_framework(self):
+        return self._statestore.get_framework()
+
+    def set_framework(self, helper_type):
+        self._statestore.set_framework(helper_type)

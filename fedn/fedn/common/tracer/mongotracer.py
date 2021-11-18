@@ -174,3 +174,83 @@ class MongoTracer(Tracer):
         running = False
         # wait for thread's end
         t.join()
+
+
+class RoundMetaNotSet(Exception):
+     pass
+
+import asyncio
+from datetime import datetime
+from collections import namedtuple
+
+class ResourceTracker():
+    # def __new__(*cls):
+    #     """ creates a singleton object, if it is not created,
+    #     or else returns the previous singleton object"""
+    #     if not hasattr(cls, 'instance'):
+    #         cls.instance = super(ResourceTracker, *cls).__new__(cls)
+    #     return cls.instance
+
+    def __init__(self,round, mongo_config, network_id):
+        self.round = round
+        self.round_meta = None
+        self.tracer = MongoTracer(mongo_config, network_id)
+        namedtuple
+        return 
+
+
+    def __enter__(self):
+        print("enter")
+        self.tracker = asyncio.create_task(self.track())
+        self.start = datetime.now()
+        print("task runinig")
+        TrackerControl = namedtuple('TrackerControl', 'increment_round set_round_meta set_combiner_time')
+        return TrackerControl(self.increment_round, self.set_round_meta, self.set_combiner_time)
+
+    def __exit__(self, excexception_type_type, exception_value, traceback):
+        self.tracker.cancel()
+
+        if not self.round_meta:
+            raise  RoundMetaNotSet("No round_meta data provided! \nProvide round_meta before exiting tracker with `set_round_meta` control function")
+        if excexception_type_type == None:
+            self.round_meta['status'] = 'Success'
+        else:
+            print("REDUCER: Global round failed!")
+            self.round_meta['status'] = 'Failed'
+            self.round_meta['time_round'] = self.round_time
+
+
+        if excexception_type_type == TypeError:
+            print("Could not unpack data from round...", flush=True)
+
+        self.tracer.set_latest_time(self.round, self.round_time.seconds)
+        self.set_combiner_time()
+        self.tracer.set_round_meta_reducer(self.round_meta)
+
+    @property  
+    def round_time(self):
+        end = datetime.now()
+        return end - self.start
+
+    def increment_round(self):
+        self.round += 1
+    
+    def set_round_meta(self,round_meta):
+        self.round_meta = round_meta
+
+    def set_combiner_time(self):
+        self.tracer.set_combiner_time(self.round, self.round_time.seconds)
+
+    async def track(self):
+        currentProcess = psutil.Process()
+        while True:
+            with currentProcess.oneshot():
+                cpu_percents = currentProcess.cpu_percent(interval=None)
+                mem_percents = currentProcess.memory_percent()
+                ps_time = str(datetime.now())
+                self.tracer.psutil_monitoring.update_one({'key': 'cpu_mem_usage'}, {'$push': {'cpu': cpu_percents}}, True)
+                self.tracer.psutil_monitoring.update_one({'key': 'cpu_mem_usage'}, {'$push': {'mem': mem_percents}}, True)
+                self.tracer.psutil_monitoring.update_one({'key': 'cpu_mem_usage'}, {'$push': {'time': ps_time}}, True)
+                self.tracer.psutil_monitoring.update_one({'key': 'cpu_mem_usage'}, {'$push': {'round': self.round}}, True)
+            await asyncio.sleep(1)
+

@@ -25,10 +25,10 @@
                 </tr>
                 </thead>
                 <tbody>
-                {% for key in model_info.keys() %}
+                {% for key, time in model_info.items() %}
                     <tr>
                         <td>{{ key }}</td>
-                        <td>{{ model_info[key] }}</td>
+                        <td>{{ time }}</td>
                     </tr>
                 {% endfor %}
                 </tbody>

@@ -305,6 +305,20 @@
                                                 </div>
 
                                             </div>
+                                            <div class="mb-3 row">
+                                                <label class="col-form-label col-sm-3 text-sm-right" for="timeout">
+                                                    Executor Combiner:
+                                                </label>
+                                                <div class="col-sm-2" style="min-width:300px;">
+                                                    <select class="form-select" id="executor_combiner" name="executor_combiner">
+                                                        {% for combiner in available_combiners %}
+                                                        <option value="{{combiner}}">{{combiner}}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+
+                                            </div>
+                                            
 
                                             <div class="mb-3 row">
                                                 <label class="col-form-label col-sm-3 text-sm-right" for="validate">Validate:

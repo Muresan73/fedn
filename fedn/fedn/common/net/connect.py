@@ -184,3 +184,33 @@ class ConnectorCombiner:
             return Status.Assigned, retval.json()
 
         return Status.Unassigned, None
+
+    def announce_supervised_combiners(self,data):
+        """
+
+        :return:
+        """
+        try:
+            cert = str(self.certificate) if self.verify_cert else False
+            retval = r.get(self.connect_string + '/supervisor',
+                           verify=cert,
+                           headers={'Authorization': 'Token {}'.format(self.token)})
+            # retval = r.post(self.connect_string + '/supervisor',
+            #                verify=cert,
+            #                headers={'Authorization': 'Token {}'.format(self.token)},
+            #                data=data)
+        except Exception as e:
+            # self.state = State.Disconnected
+            return Status.Unassigned, {}
+        
+        if retval.status_code == 401:
+            reason = "Unauthorized connection to reducer, make sure the correct token is set"
+            return Status.UnAuthorized, reason
+        
+        if retval.status_code >= 200 and retval.status_code < 204:
+            if retval.json()['status'] == 'retry':
+                reason = "Reducer was not ready. Try again later."
+                return Status.TryAgain, reason
+            return Status.Assigned, retval.json()
+
+        return Status.Unassigned, None

@@ -53,7 +53,6 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
     """ Communication relayer. """
 
     def __init__(self, connect_config):
-
         # Holds client queues 
         self.clients = {}
 
@@ -104,7 +103,13 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
 
         from fedn.clients.combiner.roundcontrol import RoundControl
         self.control = RoundControl(self.id, self.repository, self, self.modelservice)
-        threading.Thread(target=self.control.run, daemon=True).start()        
+        threading.Thread(target=self.control.run, daemon=True).start()   
+
+        from fedn.clients.reducer.statestore.mongoreducerstatestore import MongoReducerStateStore
+        statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'])
+
+        from fedn.clients.reducer.roundcontrol import RoundControl as ReducerRoundControl
+        self.round_control = ReducerRoundControl(statestore)
 
         self.server.start()
 
@@ -316,8 +321,27 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         for parameter in control.parameter:
             config.update({parameter.key: parameter.value})
         print("\n\nSTARTING ROUND AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
+        import asyncio
+        asyncio.run(self.control.push_round_config_async(config))
+        return response
 
-        job_id = self.control.push_round_config(config)
+    def Instruct(self, request, context):
+        response = fedn.ControlResponse()
+        print("\n\n GOT CONTROL **Instruct** from Command {}\n\n", flush=True)
+
+        config = { k.name:v for k,v in request.ListFields() }
+        print("\n\nSTARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
+        
+        try:
+            self.round_control.start_with_plan(config)
+            response.message = "**training started**"
+        except:
+            response.message = "!!training failed!!"
+
+        # TODO remove if not needed
+        from fedn.clients.reducer.state import ReducerState
+        self.round_control._state == ReducerState.idle
+        # =====
         return response
 
     def Configure(self, control: fedn.ControlRequest, context):

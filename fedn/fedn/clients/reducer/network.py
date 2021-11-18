@@ -1,18 +1,20 @@
 import copy
 import time
 import base64
+from typing import List, Optional
+from fedn.clients.reducer.abstract_control import AbstractNetwork
+from fedn.clients.reducer.statestore.mongoreducerstatestore import MongoReducerStateStore
 
-from .state import ReducerState
 from fedn.clients.reducer.interfaces import CombinerInterface
 from fedn.clients.reducer.interfaces import CombinerUnavailableError
 
 
-class Network:
+class Network():
     """ FEDn network. """
 
-    def __init__(self, control, statestore):
+    def __init__(self, control, statestore:MongoReducerStateStore):
         """ """
-        self.statestore = statestore
+        self._statestore = statestore
         self.control = control
         self.id = statestore.network_id
 
@@ -20,21 +22,26 @@ class Network:
     def from_statestore(self, network_id):
         """ """
 
-    def get_combiner(self, name):
+    def get_combiner(self, name) -> Optional[CombinerInterface]:
         """
 
         :param name:
         :return:
         """
-        return self.statestore.get_combiner(name)
+        
+        c = self._statestore.get_combiner(name)
+        if not c:
+            return print("Combiner not available with name: {}".format(name))
+        return CombinerInterface(c['parent'], c['name'], c['address'], c['port'], base64.b64decode(c['certificate']),
+                                  base64.b64decode(c['key']), c['ip'])
 
-    def get_combiners(self):
+    def get_combiners(self)->List[CombinerInterface]:
         """
 
         :return:
         """
         # TODO: Read in combiners from statestore
-        data = self.statestore.get_combiners()
+        data = self._statestore.get_combiners()
         combiners = []
         for c in data:
             combiners.append(
@@ -42,6 +49,10 @@ class Network:
                                   base64.b64decode(c['key']), c['ip']))
 
         return combiners
+
+    def add_new_combiner(self, parent, name, address, port, certificate, key, remote_addr):
+        combiner = CombinerInterface(parent, name, address, port, certificate, key, remote_addr)
+        self.add_combiner(combiner)
 
     def add_combiner(self, combiner):
         """
@@ -57,7 +68,7 @@ class Network:
             return
 
         print("adding combiner {}".format(combiner.name), flush=True)
-        self.statestore.set_combiner(combiner.to_dict())
+        self._statestore.set_combiner(combiner.to_dict())
 
     def add_client(self, client):
         """ Add a new client to the network. 
@@ -70,7 +81,7 @@ class Network:
             return 
 
         print("adding client {}".format(client['name']), flush=True)
-        self.statestore.set_client(client)
+        self._statestore.set_client(client)
 
     def remove(self, combiner):
         """
@@ -81,7 +92,7 @@ class Network:
         if not self.control.idle():
             print("Reducer is not idle, cannot remove combiner.")
             return
-        self.statestore.delete_combiner(combiner.name)
+        self._statestore.delete_combiner(combiner.name)
 
     def find(self, name):
         """
@@ -101,7 +112,7 @@ class Network:
         :param name:
         :return:
         """
-        ret = self.statestore.get_client(name)
+        ret = self._statestore.get_client(name)
         return ret
 
     def describe(self):
@@ -118,11 +129,3 @@ class Network:
     def check_health(self):
         """ """
         pass
-
-    def update_client_data(self, client_data, status, role):
-        """ Update client status on DB"""
-        self.statestore.update_client_status(client_data, status, role)
-
-    def get_client_info(self):
-        """ list available client in DB"""
-        return self.statestore.list_clients()
