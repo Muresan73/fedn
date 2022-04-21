@@ -192,13 +192,11 @@ class ConnectorCombiner:
         """
         try:
             cert = str(self.certificate) if self.verify_cert else False
-            retval = r.get(self.connect_string + '/supervisor',
+
+            retval = r.post(self.connect_string + '/supervisor',
                            verify=cert,
-                           headers={'Authorization': 'Token {}'.format(self.token)})
-            # retval = r.post(self.connect_string + '/supervisor',
-            #                verify=cert,
-            #                headers={'Authorization': 'Token {}'.format(self.token)},
-            #                data=data)
+                           headers={'Authorization': 'Token {}'.format(self.token)},
+                           json=data)
         except Exception as e:
             # self.state = State.Disconnected
             return Status.Unassigned, {}

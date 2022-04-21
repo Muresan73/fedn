@@ -1,3 +1,4 @@
+from urllib import response
 import uuid
 from fedn.clients.reducer.interfaces import CombinerInterface
 from fedn.clients.reducer.state import ReducerState, ReducerStateToString
@@ -323,8 +324,13 @@ class ReducerRestService:
             for node in result['nodes']:
                 try:
                     if node['type'] == 'combiner':
-                        if len(self.hierarchical_edges) > 0:
-                            pass
+                        if len(self.hierarchical_edges) > 0 and node['id'] in self.hierarchical_edges :
+                            result['edges'].append({
+                                "id": "e{}".format(count),
+                                "source": node['id'],
+                                "target": self.hierarchical_edges[node['id']],
+                            })
+                            count+=1
                         else: result['edges'].append(
                             {
                                 "id": "e{}".format(count),
@@ -378,13 +384,13 @@ class ReducerRestService:
 
         @app.route('/supervisor', methods=['GET','POST'])
         def supervisor():
-            return None
             # authorize(request, self.token)
             body = request.get_json( )
             supervisor_node = body.get('supervisor')
             supervised_combiners = body.get('worker')
 
             self.hierarchical_edges.update({combiner:supervisor_node for combiner in supervised_combiners})
+            return response
 
         @app.route('/add')
         def add():

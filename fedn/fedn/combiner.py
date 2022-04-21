@@ -29,6 +29,11 @@ class Role(Enum):
     REDUCER = 3
     OTHER = 4
 
+class Availability_Status(Enum):
+    FREE = 'free'
+    BOOKED = 'booked'
+
+
 
 def role_to_proto_role(role):
     """
@@ -55,6 +60,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
     def __init__(self, connect_config):
         # Holds client queues 
         self.clients = {}
+        self.supervisor_status = Availability_Status.FREE
 
         self.modelservice = ModelService()
 
@@ -64,7 +70,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
 
         self.model_id = None
 
-        announce_client = ConnectorCombiner(host=connect_config['discover_host'],
+        self.announce_client = ConnectorCombiner(host=connect_config['discover_host'],
                                             port=connect_config['discover_port'],
                                             myhost=connect_config['myhost'],
                                             myport=connect_config['myport'],
@@ -73,7 +79,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
 
         response = None
         while True:
-            status, response = announce_client.announce()
+            status, response = self.announce_client.announce()
             if status == Status.TryAgain:
                 print(response, flush=True)
                 time.sleep(5)
@@ -108,8 +114,9 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         from fedn.clients.reducer.statestore.mongoreducerstatestore import MongoReducerStateStore
         statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'])
 
-        from fedn.clients.reducer.roundcontrol import RoundControl as ReducerRoundControl
-        self.round_control = ReducerRoundControl(statestore)
+        from fedn.clients.reducer.control_saga.roundcontrol import RoundControl as ReducerRoundControl
+        from fedn.clients.reducer.control_saga.treecontrol import TreeControl
+        self.round_control = TreeControl(statestore,self)
 
         self.server.start()
 
@@ -333,14 +340,16 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         print("\n\nSTARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
         
         try:
+            self.supervisor_status = Availability_Status.BOOKED
             self.round_control.start_with_plan(config)
-            response.message = "**training started**"
+            response.message = "**training completed**"
         except:
             response.message = "!!training failed!!"
 
         # TODO remove if not needed
         from fedn.clients.reducer.state import ReducerState
         self.round_control._state == ReducerState.idle
+        self.supervisor_status = Availability_Status.FREE
         # =====
         return response
 
@@ -419,6 +428,31 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         p.value = str(self.id)
         
         return response
+
+    def Book(self, control: fedn.ControlRequest, context):
+        """
+
+        :param control:
+        :param context:
+        :return:
+        """
+
+        print('Booking attempt')
+        response = fedn.ControlResponse(message='ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
+        print('Message: ','ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
+        self.supervisor_status = Availability_Status.BOOKED
+        return response
+
+    def Availability(self, control: fedn.ControlRequest, context):
+        """
+
+        :param control:
+        :param context:
+        :return:
+        """
+        print('Availability requested')
+        response = fedn.ControlResponse(message=self.supervisor_status.value)
+        return response  
 
     #####################################################################################################################
 
