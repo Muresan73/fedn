@@ -1,3 +1,4 @@
+import asyncio
 import time
 import json
 import os
@@ -10,6 +11,7 @@ import queue
 
 import fedn.common.net.grpc.fedn_pb2 as fedn
 from threading import Thread, Lock
+from fedn.combiner import Combiner
 from fedn.utils.helpers import get_helper
  
 class RoundControl:
@@ -29,7 +31,7 @@ class RoundControl:
     :type modelservice: class: `fedn.clients.combiner.modelservice.ModelService`
     """
 
-    def __init__(self, id, storage, server, modelservice):
+    def __init__(self, id, storage, server:Combiner, modelservice):
 
         self.id = id
         self.round_configs = queue.Queue()
@@ -130,6 +132,10 @@ class RoundControl:
 
         self.server.report_status("ROUNDCONTROL: Initiating training round, participating members: {}".format(clients))
         self.server.request_model_update(config['model_id'], clients=clients)
+        self.server.round_control.request_model_update(config['model_id'])
+        
+        print("run learning on supervised nodes")
+
 
         meta = {}
         meta['nr_expected_updates'] = len(clients)
@@ -140,9 +146,24 @@ class RoundControl:
         data = None
         try:
             helper = get_helper(config['helper_type'])
-            model, data = self.aggregator.combine_models(nr_expected_models=len(clients),
-                                              nr_required_models=int(config['clients_required']),
-                                              helper=helper, timeout=float(config['round_timeout']))
+
+            async def paralel_training():
+                (model, data), (_, model_next) = await asyncio.gather(
+                    asyncio.shield(self.aggregator.combine_models(nr_expected_models=len(clients),
+                                                   nr_required_models=int(config['clients_required']),
+                                                   helper=helper, timeout=float(config['round_timeout']))),
+                    asyncio.shield(self.server.round_control.run_one_round(config))
+                )
+                return model,data,model_next
+
+            model,data,model_next = asyncio.run(paralel_training())
+            if self.server.round_control.is_supervisor() and model_next:
+                print("Aggregate with reduced model")
+                if model:
+                    model = helper.increment_average(model, model_next, self.aggregator.nr_processed_models + 1)
+                else:
+                    model = model_next
+
         except Exception as e:
             print("TRAINING ROUND FAILED AT COMBINER! {}".format(e), flush=True)
         meta['time_combination'] = time.time() - tic
@@ -315,7 +336,7 @@ class RoundControl:
                     config = self.round_configs.get(block=False)
                     (round_config,done) = config if type(config) is tuple else (config,lambda:None)
                     try:
-                        ready = self.__check_nr_round_clients(round_config)
+                        ready = True # self.__check_nr_round_clients(round_config)
                         if ready:
                             if round_config['task'] == 'training':
                                 tic = time.time()

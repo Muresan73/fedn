@@ -384,7 +384,7 @@ class ReducerRestService:
 
         @app.route('/supervisor', methods=['GET','POST'])
         def supervisor():
-            # authorize(request, self.token)
+            #TODO add to combiner report request 
             body = request.get_json( )
             supervisor_node = body.get('supervisor')
             supervised_combiners = body.get('worker')
@@ -503,6 +503,7 @@ class ReducerRestService:
 
             if request.method == 'POST':
                 self.hierarchical_edges = {}
+
                 timeout = float(request.form.get('timeout', 180))
                 rounds = int(request.form.get('rounds', 1))
                 task = (request.form.get('task', ''))

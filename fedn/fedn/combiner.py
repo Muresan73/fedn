@@ -101,20 +101,21 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
                        'certificate': cert,
                        'key': key}
 
-        self.repository = S3ModelRepository(config['storage']['storage_config'])
+        repository = S3ModelRepository(config['storage']['storage_config'])
         self.server = Server(self, self.modelservice, grpc_config)
 
         from fedn.common.tracer.mongotracer import MongoTracer
         self.tracer = MongoTracer(config['statestore']['mongo_config'], config['statestore']['network_id'])
 
         from fedn.clients.combiner.roundcontrol import RoundControl
-        self.control = RoundControl(self.id, self.repository, self, self.modelservice)
+        self.control = RoundControl(self.id, repository, self, self.modelservice)
         threading.Thread(target=self.control.run, daemon=True).start()   
 
         from fedn.clients.reducer.statestore.mongoreducerstatestore import MongoReducerStateStore
-        statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'])
+        statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'], store_name=self.id)
+        # statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'])
 
-        from fedn.clients.reducer.control_saga.roundcontrol import RoundControl as ReducerRoundControl
+        # from fedn.clients.reducer.control_saga.roundcontrol import RoundControl as ReducerRoundControl
         from fedn.clients.reducer.control_saga.treecontrol import TreeControl
         self.round_control = TreeControl(statestore,self)
 
@@ -322,6 +323,8 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         :return:
         """
         response = fedn.ControlResponse()
+        self.supervisor_status = Availability_Status.FREE
+
         print("\n\n GOT CONTROL **START** from Command {}\n\n".format(control.command), flush=True)
 
         config = {}
@@ -333,6 +336,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         return response
 
     def Instruct(self, request, context):
+        print('instruction revecived')
         response = fedn.ControlResponse()
         print("\n\n GOT CONTROL **Instruct** from Command {}\n\n", flush=True)
 
@@ -340,10 +344,17 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         print("\n\nSTARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
         
         try:
+            print('trainig is on')
             self.supervisor_status = Availability_Status.BOOKED
+            # self.round_control.build_supervisor_tree(reducer_name=self.id)
+            self.round_control.build_supervisor_tree()
+            # Wait for leaf combiners to build the tree
+            from time import sleep
+            sleep(5)
             self.round_control.start_with_plan(config)
             response.message = "**training completed**"
         except:
+            print('itt valami nagy gebasz van')
             response.message = "!!training failed!!"
 
         # TODO remove if not needed
@@ -440,7 +451,13 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         print('Booking attempt')
         response = fedn.ControlResponse(message='ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
         print('Message: ','ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
-        self.supervisor_status = Availability_Status.BOOKED
+
+        if self.supervisor_status is Availability_Status.FREE:
+            self.supervisor_status = Availability_Status.BOOKED
+            self.round_control.build_supervisor_tree()
+
+
+
         return response
 
     def Availability(self, control: fedn.ControlRequest, context):

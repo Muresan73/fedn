@@ -42,14 +42,14 @@ class CombinerNetwork(Network):
     def get_framework(self):
         return self._statestore.get_framework()
 
-    async def sync_combiners(self, combiners, model_id):
+    async def sync_combiners(self, combiners:List[CombinerInterface], model_id):
         for resp in asyncio.as_completed(map(lambda combiner: combiner.a_set_model_id(model_id), combiners)):
             try:
                 await resp
             except CombinerUnavailableError as combiner_error:
                 handle_unavailable_combiner(combiner_error.combiner)
 
-    async def execute_training(self, combiners, compute_plan):
+    async def execute_training(self, combiners:List[CombinerInterface], compute_plan):
         for resp in asyncio.as_completed(map(lambda combiner: combiner.a_start(compute_plan), combiners)):
             try:
                 await resp
@@ -90,6 +90,8 @@ async def execute_plan(config, network: CombinerNetwork):
     for round in range(1, int(config['rounds'] + 1)):
         round_meta = await supervise_round(config, round, network)
         print("REDUCER: Global round completed, new model: {}".format(round_meta["model_id"]), flush=True)
+    # TODO sync whole network 
+    # TODO update local model to global
 
 
 async def supervise_round(config, round, network: CombinerNetwork):
@@ -153,7 +155,7 @@ async def supervise_round(config, round, network: CombinerNetwork):
 
 
     if not round_meta.get("model_id"): round_meta["model_id"] = "same"
-    return round_meta
+    return round_meta, model
 
 
 async def reduce_global_model(updated, helper):
@@ -258,6 +260,8 @@ def check_round_participation_policy(compute_plan, combiner_state):
         This is a decision on ReducerControl level, additional checks
         applies on combiner level. Not all reducer control flows might
         need or want to use a participation policy.  """
+
+    return True
 
     if compute_plan['task'] == 'training':
         nr_active_clients = int(combiner_state['nr_active_trainers'])

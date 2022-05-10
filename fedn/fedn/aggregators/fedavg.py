@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import queue
@@ -79,7 +80,7 @@ class FedAvgAggregator(AggregatorBase):
                            log_level=fedn.Status.INFO)
 
 
-    def combine_models(self, nr_expected_models=None, nr_required_models=1, helper=None, timeout=180):
+    async def combine_models(self, nr_expected_models=None, nr_required_models=1, helper=None, timeout=180):
         """Compute a running average of model updates.
 
         :param nr_expected_models: The number of updates expected in this round, defaults to None
@@ -103,8 +104,11 @@ class FedAvgAggregator(AggregatorBase):
 
         round_time = 0.0
         polling_interval = 1.0
-        nr_processed_models = 0
-        while nr_processed_models < nr_expected_models:
+        self.nr_processed_models = 0
+
+        if nr_expected_models == 0: return None,None
+
+        while self.nr_processed_models < nr_expected_models:
             try:
                 model_id = self.model_updates.get(block=False)
                 self.server.report_status("AGGREGATOR({}): Received model update with id {}".format(self.name, model_id))
@@ -123,19 +127,19 @@ class FedAvgAggregator(AggregatorBase):
 
                 # Aggregate / reduce 
                 tic = time.time()
-                if nr_processed_models == 0:
+                if self.nr_processed_models == 0:
                     model = model_next
                 else:
-                    model = helper.increment_average(model, model_next, nr_processed_models + 1)
+                    model = helper.increment_average(model, model_next, self.nr_processed_models + 1)
                 data['time_model_aggregation'] += time.time() - tic
 
-                nr_processed_models += 1
+                self.nr_processed_models += 1
                 self.model_updates.task_done()
             except queue.Empty:
                 self.server.report_status("AGGREGATOR({}): waiting for model updates: {} of {} completed.".format(self.name, 
-                                                                                                                  nr_processed_models,
+                                                                                                                  self.nr_processed_models,
                                                                                                                   nr_expected_models))
-                time.sleep(polling_interval)
+                await asyncio.sleep(polling_interval)
                 round_time += polling_interval
             except Exception as e:
                 self.server.report_status("AGGERGATOR({}): Error encoutered while reading model update, skipping this update. {}".format(self.name, e))
@@ -147,13 +151,15 @@ class FedAvgAggregator(AggregatorBase):
             if round_time >= timeout:
                 self.server.report_status("AGGREGATOR({}): training round timed out.".format(self.name), log_level=fedn.Status.WARNING)
                 # TODO: Generalize policy for what to do in case of timeout. 
-                if nr_processed_models >= nr_required_models:
+                if self.nr_processed_models >= nr_required_models:
                     break
                 else:
                     return None, data
 
-        data['nr_successful_updates'] = nr_processed_models
+        
 
-        self.server.report_status("AGGREGATOR({}): Training round completed, aggregated {} models.".format(self.name, nr_processed_models),
+        data['nr_successful_updates'] = self.nr_processed_models
+
+        self.server.report_status("AGGREGATOR({}): Training round completed, aggregated {} models.".format(self.name, self.nr_processed_models),
                            log_level=fedn.Status.INFO)
         return model, data

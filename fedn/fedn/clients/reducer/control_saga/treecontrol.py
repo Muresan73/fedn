@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from collections import namedtuple
 import random
 from typing import List
@@ -6,15 +7,7 @@ from fedn.clients.reducer.control_saga.roundcontrol import CombinerNetwork, get_
 from fedn.clients.reducer.interfaces import CombinerInterface, CombinerUnavailableError
 from fedn.clients.reducer.state import ReducerState
 from fedn.combiner import Combiner, Availability_Status
-
-
-# async def ping(self,combiners:List[CombinerInterface]):
-#     for resp in asyncio.as_completed(map(lambda combiner: combiner.ping(), combiners)):
-#     try:
-#         combiner:CombinerInterface = await resp
-#         combiner.get_model()
-#     except CombinerUnavailableError as combiner_error:
-#         handle_unavailable_combiner(combiner_error.combiner)
+from fedn.clients.reducer.control_saga.roundcontrol import supervise_round
 
 async def select_leafnodes(config, combiners: List[CombinerInterface]):
     # TODO not available_combiners handling
@@ -25,50 +18,70 @@ async def select_leafnodes(config, combiners: List[CombinerInterface]):
     available_combiners = [parent for (parent, response) in requested_combiners if response == Availability_Status.FREE.value]
 
     # Select combiners to supervise
-    selected = random.sample(available_combiners, config.get('leaf_numbers') or 2) # TODO put leaf number in config page
+    if len(available_combiners) > config.get('leaf_numbers'):
+        selected = random.sample(available_combiners, config.get('leaf_numbers')) # TODO put leaf number in config page
+    else:
+        selected = available_combiners
     selected_combiners = (get_combiner_with_info(combiner, combiner.book()) for combiner in selected)
     leaf_combiners = await asyncio.gather(*selected_combiners)
 
     leaf_combiners = [combiner for (combiner, response) in leaf_combiners if response == 'ack']
 
-    if len(leaf_combiners) < (config.get('leaf_numbers') or 2):
+    if len(leaf_combiners) < (config.get('leaf_numbers')):
         print('\n Not enough leafs \n')
     return leaf_combiners
 
-
-def set_combiners_current_model_to_reducer_one():
+class Error(Exception):
     pass
 
+class TreeCombinerNetwork(CombinerNetwork):
+    def set_controlled_nodes(self,combiner_list:List[CombinerInterface]):
+        self.combiner_list = combiner_list
 
-def commit_to_local_model():
-    pass
+    def get_combiners(self) -> List[CombinerInterface]:
+        return self.combiner_list
+        
+    def get_all_combiners(self) -> List[CombinerInterface]:
+        data = self._statestore.get_combiners() or []
+        return [CombinerInterface(c['parent'], c['name'], c['address'], c['port'],
+                                  base64.b64decode(c['certificate']),
+                                  base64.b64decode(c['key']), c['ip']) for c in data]
+    
+    def get_latest_model(self):
+        if hasattr(self, 'latest_model'):
+            return self.latest_model
+        else: 
+            raise Error("No latest model set")
 
+    def set_latest_model(self, latest_model):
+        self.latest_model = latest_model
+    
+    def get_global_latest_model(self):
+        return self._statestore.get_latest()
 
 class TreeControl:
     """ 
     Reducer level round controller. 
     """
-    # def __new__(cls):
-    #     """ creates a singleton object, if it is not created,
-    #     or else returns the previous singleton object"""
-    #     if not hasattr(cls, 'instance'):
-    #         cls.instance = super(RoundControl, cls).__new__(cls)
-    #     return cls.instance
 
     def __init__(self, statestore, localCombiner: Combiner):
         self._state = ReducerState.setup
         Control = namedtuple("Control", 'idle')
         control = Control(lambda: self._state == ReducerState.idle)
-        self.network = CombinerNetwork(control, statestore)
+        self.network = TreeCombinerNetwork(control, statestore)
         self.localCombiner = localCombiner
 
     def start_with_plan(self, config):
         if not self._state == ReducerState.instructing:
             self._state = ReducerState.instructing
+            self.network._statestore.copy_global_model()
             try:
-                asyncio.run(execute_plan(config, self.network, self.select_supervised_nodes))
+                asyncio.run(execute_plan(config, self.network))
+                self.network._statestore.update_global_model()
+
             except:
                 print("plan execution failed")
+            
             self._state = ReducerState.idle
 
     def select_supervised_nodes(self, combiners: List[CombinerInterface]):
@@ -78,34 +91,48 @@ class TreeControl:
         }
         self.localCombiner.announce_client.announce_supervised_combiners(data)
 
+    def request_model_update(self,model_id):
+        self.network.set_latest_model(model_id)
 
-async def execute_plan(config, network: CombinerNetwork, anounce_leaves):
-    combiners = network.get_combiners()
-    supervised_combiners = await select_leafnodes(config, combiners)
-    anounce_leaves(supervised_combiners)
-    await instruct_leaves(config, supervised_combiners)
+    def build_supervisor_tree(self,config={'leaf_numbers':2},reducer_name=None):
+        combiners = self.network.get_all_combiners()
+        supervised_combiners = asyncio.run( select_leafnodes(config, combiners))
+        if reducer_name:
+            reducer_combiner = next(combiner for combiner in combiners if combiner.name == reducer_name)
+            supervised_combiners.append(reducer_combiner)
+        self.network.set_controlled_nodes(supervised_combiners)
+        if len(supervised_combiners) > 0 :
+            self.select_supervised_nodes(supervised_combiners)
+            print("booked peers",[x.name for x in supervised_combiners])
+            
+    async def run_one_round(self, config):
+        if self.is_supervisor() :
+            return await supervise_round(config,config['rounds'], self.network)
+        else:
+            return None, None
 
-    for round in range(1, int(config['rounds'] + 1)):
-        round_meta = await supervise_round(config, round, network, supervised_combiners)
-        print("REDUCER: Global round completed, new model: {}".format(round_meta["model_id"]), flush=True)
+    def is_supervisor(self):
+        supervised_combiners = self.network.get_combiners()
+        return len(supervised_combiners) > 0
 
 
-async def supervise_round(config, round, network: CombinerNetwork, supervised_combiners):
 
-    return {'model_id': 'new'}
+async def execute_plan(config, network: TreeCombinerNetwork):
+    print("Start execution")
+    supervised_combiners = network.get_combiners()
+    if len(supervised_combiners) > 0 :
+
+        for round in range(1, int(config['rounds'] + 1)):
+
+            network.set_latest_model(network.get_global_latest_model())
+            round_meta, model = await supervise_round(config, round, network)
+            print("REDUCER: Global round completed, new model: {}".format(round_meta["model_id"]), flush=True)
+    else:
+        print("no combiners to supervise")
+
+
 
 # ================
 # Utility
 # ================
 
-
-async def instruct_leaves(config, supervised_combiners):
-    for resp in asyncio.as_completed([combiner.instruct(config) for combiner in supervised_combiners]):
-        try:
-            await resp
-        except CombinerUnavailableError as combiner_error:
-            handle_unavailable_combiner(combiner_error.combiner)
-
-
-def anounce_leaves(combiners: List[CombinerInterface]):
-    pass

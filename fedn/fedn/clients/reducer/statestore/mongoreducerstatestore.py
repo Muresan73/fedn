@@ -9,7 +9,7 @@ class MongoReducerStateStore(ReducerStateStore):
 
     """
 
-    def __init__(self, network_id, config, defaults=None):
+    def __init__(self, network_id, config, defaults=None, store_name=None):
         self.__inited = False
         try:
             self.config = config
@@ -27,8 +27,14 @@ class MongoReducerStateStore(ReducerStateStore):
             self.control = self.mdb['control']
             self.control_config = self.control['config']
             self.control_state = self.control['state']
-            self.model = self.control['model']
             self.round = self.control["round"]
+
+            if store_name:
+                self.store_name = store_name
+                self.model = self.control[store_name+'_model']
+                self.copy_global_model()
+            else: 
+                self.model = self.control['model']
 
             # Logging and dashboards
             self.status = self.control["status"]
@@ -46,7 +52,7 @@ class MongoReducerStateStore(ReducerStateStore):
             self.combiners : Any = None
             self.clients : Any = None
             raise
-
+        
         import yaml
         if defaults:
             with open(defaults, 'r') as file:
@@ -402,3 +408,14 @@ class MongoReducerStateStore(ReducerStateStore):
                                         "role": role
                                     }
                                 })
+                                
+    def copy_global_model(self):
+        if self.store_name:
+            global_model = self.control['model']
+            pipeline = [ {"$match": {}}, {"$out": 'control.'+self.store_name+'_model'}, ]
+            global_model.aggregate(pipeline)
+
+    def update_global_model(self):
+        if self.store_name:
+            pipeline = [ {"$match": {}}, {"$out": 'control.model'}, ]
+            self.model.aggregate(pipeline)

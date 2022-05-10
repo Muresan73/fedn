@@ -257,6 +257,29 @@ class CombinerInterface:
 
         print("Response from combiner {}".format(response.message))
         return response
+    
+    async def a_instruct(self, config):
+        """
+
+        :param config:
+        :return:
+        """
+        channel = Async_Channel(self.address, self.port, self.certificate).get_channel()
+        control = rpc.ControlStub(channel)
+        request = fedn.InstructConfig()
+        for k, v in config.items():
+            setattr(request, k, v)
+
+        try:
+            response = await control.Instruct(request)
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNAVAILABLE:
+                raise CombinerUnavailableError
+            else:
+                raise
+
+        print("Response from combiner {}".format(response.message))
+        return response
 
     async def a_start(self, config):
         """

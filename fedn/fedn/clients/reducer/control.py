@@ -637,8 +637,12 @@ class ReducerControl:
         if reducer:
             config.pop("executor_combiner")
             self.__state = ReducerState.instructing
-            reducer.instruct(config)
-            self.__state = ReducerState.idle
+            try:
+                reducer.instruct(config)
+            except:
+                print('Error during instruction')
+            finally:
+                self.__state = ReducerState.idle
         
     
     def get_client_info(self):
