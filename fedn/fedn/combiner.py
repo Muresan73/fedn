@@ -332,7 +332,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
             config.update({parameter.key: parameter.value})
         print("\n\nSTARTING ROUND AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
         import asyncio
-        asyncio.run(self.control.push_round_config_async(config))
+        asyncio.run((self.control.push_round_config_async(config)))
         return response
 
     def Instruct(self, request, context):
@@ -340,18 +340,18 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         response = fedn.ControlResponse()
         print("\n\n GOT CONTROL **Instruct** from Command {}\n\n", flush=True)
 
-        config = { k.name:v for k,v in request.ListFields() }
+        config = {k.name: v for k, v in request.ListFields()}
         print("\n\nSTARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
-        
+
         try:
             print('trainig is on')
             self.supervisor_status = Availability_Status.BOOKED
-            # self.round_control.build_supervisor_tree(reducer_name=self.id)
-            self.round_control.build_supervisor_tree()
+            self.round_control.build_supervisor_tree(reducer_name=self.id, loop=self.control.loop)
+            # self.round_control.build_supervisor_tree()
             # Wait for leaf combiners to build the tree
             from time import sleep
             sleep(5)
-            self.round_control.start_with_plan(config)
+            self.round_control.start_with_plan(config, loop=self.control.loop)
             response.message = "**training completed**"
         except:
             print('itt valami nagy gebasz van')

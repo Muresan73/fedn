@@ -71,12 +71,15 @@ class TreeControl:
         self.network = TreeCombinerNetwork(control, statestore)
         self.localCombiner = localCombiner
 
-    def start_with_plan(self, config):
+    def start_with_plan(self, config, loop=None):
         if not self._state == ReducerState.instructing:
             self._state = ReducerState.instructing
             self.network._statestore.copy_global_model()
             try:
-                asyncio.run(execute_plan(config, self.network))
+                if loop:
+                    asyncio.run_coroutine_threadsafe(execute_plan(config, self.network),loop)
+                else:
+                    asyncio.run(execute_plan(config, self.network))
                 self.network._statestore.update_global_model()
 
             except:
@@ -94,9 +97,12 @@ class TreeControl:
     def request_model_update(self,model_id):
         self.network.set_latest_model(model_id)
 
-    def build_supervisor_tree(self,config={'leaf_numbers':2},reducer_name=None):
+    def build_supervisor_tree(self,config={'leaf_numbers':2},reducer_name=None,loop=None):
         combiners = self.network.get_all_combiners()
-        supervised_combiners = asyncio.run( select_leafnodes(config, combiners))
+        if loop:
+            supervised_combiners = asyncio.run_coroutine_threadsafe( select_leafnodes(config, combiners),loop).result()
+        else:
+            supervised_combiners = asyncio.run( select_leafnodes(config, combiners))
         if reducer_name:
             reducer_combiner = next(combiner for combiner in combiners if combiner.name == reducer_name)
             supervised_combiners.append(reducer_combiner)

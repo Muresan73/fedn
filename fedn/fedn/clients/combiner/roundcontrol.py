@@ -39,6 +39,7 @@ class RoundControl:
         self.server = server
         self.modelservice = modelservice
         self.config = {}
+        self.loop = None
 
         # TODO, make runtime configurable
         from fedn.aggregators.fedavg import FedAvgAggregator
@@ -330,34 +331,38 @@ class RoundControl:
         """ Main control loop. Sequentially execute rounds based on round config. 
 
         """
-        try:
-            while True:
-                if not self.round_configs.empty():
-                    config = self.round_configs.get(block=False)
-                    (round_config,done) = config if type(config) is tuple else (config,lambda:None)
-                    try:
-                        ready = True # self.__check_nr_round_clients(round_config)
-                        if ready:
-                            if round_config['task'] == 'training':
-                                tic = time.time()
-                                round_meta = self.execute_training(round_config)
-                                round_meta['time_exec_training'] = time.time() - tic
-                                round_meta['name'] = self.id
-                                self.server.tracer.set_round_meta(round_meta)
-                            elif round_config['task'] == 'validation':
-                                self.execute_validation(round_config)
+        async def control_loop():
+            self.loop = asyncio.get_running_loop()
+            try:
+                while True:
+                    if not self.round_configs.empty():
+                        config = self.round_configs.get(block=False)
+                        (round_config,done) = config if type(config) is tuple else (config,lambda:None)
+                        try:
+                            ready = True # self.__check_nr_round_clients(round_config)
+                            if ready:
+                                if round_config['task'] == 'training':
+                                    tic = time.time()
+                                    round_meta = self.execute_training(round_config)
+                                    round_meta['time_exec_training'] = time.time() - tic
+                                    round_meta['name'] = self.id
+                                    self.server.tracer.set_round_meta(round_meta)
+                                elif round_config['task'] == 'validation':
+                                    self.execute_validation(round_config)
+                                else:
+                                    self.server.report_status("ROUNDCONTROL: Round config contains unkown task type.", flush=True)
                             else:
-                                self.server.report_status("ROUNDCONTROL: Round config contains unkown task type.", flush=True)
-                        else:
-                            self.server.report_status("ROUNDCONTROL: Failed to meet client allocation requirements for this round config.", flush=True)
-                        done()
-                    except:
-                        print("error during round: abort")
-                        done()
-                else:
-                    time.sleep(1)
+                                self.server.report_status("ROUNDCONTROL: Failed to meet client allocation requirements for this round config.", flush=True)
+                            done()
+                        except:
+                            print("error during round: abort")
+                            done()
+                    else:
+                        await asyncio.sleep(1)
+            except (KeyboardInterrupt, SystemExit):
+                pass
+            finally:
+                self.loop = None
 
-
-
-        except (KeyboardInterrupt, SystemExit):
-            pass
+        asyncio.run(control_loop())
+        
