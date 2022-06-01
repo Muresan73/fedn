@@ -49,6 +49,12 @@ class Async_Channel:
                     {
                     "service": "Control.Configure"
                 },
+                    {
+                    "service": "Control.Book"
+                },
+                    {
+                    "service": "Control.Availability"
+                },
                 ],
                 "retryPolicy": {
                     "maxAttempts": 5,
@@ -297,15 +303,14 @@ class CombinerInterface:
             p.value = str(v)
 
         try:
-            response = await control.Start(request)
+            async for response in control.Start(request):
+                print("Response from combiner: {}".format(response.message))
         except grpc.RpcError as e:
+            print('No valid response')
             if e.code() == grpc.StatusCode.UNAVAILABLE:
                 raise CombinerUnavailableError(self)
             else:
                 raise
-
-        print("Response from combiner {}".format(response.message))
-        return response
 
     def set_model_id(self, model_id):
         """

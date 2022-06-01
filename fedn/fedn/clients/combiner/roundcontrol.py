@@ -1,6 +1,6 @@
 import asyncio
 import time
-import json
+import numpy as np
 import os
 import queue
 import tempfile
@@ -115,7 +115,7 @@ class RoundControl:
 
         return model_str
 
-    def _training_round(self, config, clients):
+    async def _training_round(self, config, clients):
         """Send model update requests to clients and aggregate results. 
 
         :param config: [description]
@@ -157,10 +157,11 @@ class RoundControl:
                 )
                 return model,data,model_next
 
-            model,data,model_next = asyncio.run(paralel_training())
-            if self.server.round_control.is_supervisor() and model_next:
+            model,data,model_next = await paralel_training()
+            if self.server.round_control.is_supervisor() and model_next is not None:
                 print("Aggregate with reduced model")
-                if model:
+                model_next = np.array(model_next)
+                if model is not None:
                     model = helper.increment_average(model, model_next, self.aggregator.nr_processed_models + 1)
                 else:
                     model = model_next
@@ -292,7 +293,7 @@ class RoundControl:
         validators = self.__assign_round_clients(self.server.max_clients,type="validators")
         self._validation_round(round_config,validators,model_id)        
 
-    def execute_training(self, config):
+    async def execute_training(self, config):
         """ Coordinates clients to execute training and validation tasks. """
 
         round_meta = {}
@@ -306,7 +307,7 @@ class RoundControl:
         for r in range(1, int(config['rounds']) + 1):
             self.server.report_status("ROUNDCONTROL: Starting training round {}".format(r), flush=True)
             clients = self.__assign_round_clients(self.server.max_clients)
-            model, meta = self._training_round(config, clients)
+            model, meta = await self._training_round(config, clients)
             round_meta['local_round'][str(r)] = meta
             if model is None:
                 self.server.report_status("\t Failed to update global model in round {0}!".format(r))
@@ -343,7 +344,7 @@ class RoundControl:
                             if ready:
                                 if round_config['task'] == 'training':
                                     tic = time.time()
-                                    round_meta = self.execute_training(round_config)
+                                    round_meta = await self.execute_training(round_config)
                                     round_meta['time_exec_training'] = time.time() - tic
                                     round_meta['name'] = self.id
                                     self.server.tracer.set_round_meta(round_meta)
@@ -360,6 +361,7 @@ class RoundControl:
                     else:
                         await asyncio.sleep(1)
             except (KeyboardInterrupt, SystemExit):
+                print("exitting")
                 pass
             finally:
                 self.loop = None

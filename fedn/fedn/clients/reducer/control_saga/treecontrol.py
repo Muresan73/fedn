@@ -1,6 +1,7 @@
 import asyncio
 import base64
 from collections import namedtuple
+from datetime import datetime
 import random
 from typing import List
 from fedn.clients.reducer.control_saga.roundcontrol import CombinerNetwork, get_combiner_with_info, handle_unavailable_combiner
@@ -71,15 +72,17 @@ class TreeControl:
         self.network = TreeCombinerNetwork(control, statestore)
         self.localCombiner = localCombiner
 
-    def start_with_plan(self, config, loop=None):
+    def start_with_plan(self, config,reducer_name, loop=None):
         if not self._state == ReducerState.instructing:
             self._state = ReducerState.instructing
             self.network._statestore.copy_global_model()
             try:
                 if loop:
-                    asyncio.run_coroutine_threadsafe(execute_plan(config, self.network),loop)
+                    print('execute coroutine')
+                    asyncio.run_coroutine_threadsafe(execute_plan(config, self.network,reducer_name),loop)
                 else:
-                    asyncio.run(execute_plan(config, self.network))
+                    print('execute standalone')
+                    asyncio.run(execute_plan(config, self.network,reducer_name))
                 self.network._statestore.update_global_model()
 
             except:
@@ -97,15 +100,15 @@ class TreeControl:
     def request_model_update(self,model_id):
         self.network.set_latest_model(model_id)
 
-    def build_supervisor_tree(self,config={'leaf_numbers':2},reducer_name=None,loop=None):
+    def build_supervisor_tree(self,config={'leaf_numbers':2},loop=None):
         combiners = self.network.get_all_combiners()
         if loop:
             supervised_combiners = asyncio.run_coroutine_threadsafe( select_leafnodes(config, combiners),loop).result()
         else:
             supervised_combiners = asyncio.run( select_leafnodes(config, combiners))
-        if reducer_name:
-            reducer_combiner = next(combiner for combiner in combiners if combiner.name == reducer_name)
-            supervised_combiners.append(reducer_combiner)
+        # if reducer_name:
+        #     reducer_combiner = next(combiner for combiner in combiners if combiner.name == reducer_name)
+        #     supervised_combiners.append(reducer_combiner)
         self.network.set_controlled_nodes(supervised_combiners)
         if len(supervised_combiners) > 0 :
             self.select_supervised_nodes(supervised_combiners)
@@ -113,8 +116,9 @@ class TreeControl:
             
     async def run_one_round(self, config):
         if self.is_supervisor() :
-            return await supervise_round(config,config['rounds'], self.network)
+            return await supervise_round(config,config['round_id'], self.network)
         else:
+            print('nothing to supervise')
             return None, None
 
     def is_supervisor(self):
@@ -123,18 +127,50 @@ class TreeControl:
 
 
 
-async def execute_plan(config, network: TreeCombinerNetwork):
+async def execute_plan(config, network: TreeCombinerNetwork, reducer_name):
     print("Start execution")
-    supervised_combiners = network.get_combiners()
-    if len(supervised_combiners) > 0 :
+    
 
-        for round in range(1, int(config['rounds'] + 1)):
+    combiners = network.get_all_combiners()
+    reducer_combiner = next(combiner for combiner in combiners if combiner.name == reducer_name)
 
-            network.set_latest_model(network.get_global_latest_model())
-            round_meta, model = await supervise_round(config, round, network)
-            print("REDUCER: Global round completed, new model: {}".format(round_meta["model_id"]), flush=True)
-    else:
-        print("no combiners to supervise")
+    await reducer_combiner.book()
+    await asyncio.sleep(15)
+    
+    start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for round in range(1, int(config['rounds'] + 1)):
+
+        network.set_latest_model(network.get_global_latest_model())
+        # TODO just run trainig on itslef rest will be handled
+        config['rounds'] = 1
+        config['round_id'] = round
+        config['task'] = 'training'
+        config['model_id'] = network.get_latest_model()
+        config['helper_type'] = network.get_framework()
+        config['commit_model'] = True
+        await reducer_combiner.a_start(config)
+        new_model_id = await reducer_combiner.a_get_model_id()
+        print("latest mongo model  (trained): ",network.get_latest_model())
+        print("new reducer model: ",new_model_id)
+
+        config['commit_model'] = False
+        config['model_id'] = network.get_latest_model()
+        print("validation model id: ",config['model_id'])
+        config['task'] = 'validation'
+        await reducer_combiner.a_start(config)
+
+        print("latest mongo model (validated): ",network.get_latest_model())
+
+        # round_meta, model = await supervise_round(config, round, network)
+        print("REDUCER: Global round completed, new model: {}".format(new_model_id), flush=True)
+
+    print("Global Learning process Concluded")
+    network._statestore.update_global_model()
+
+    end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    print("started: ",start_time)
+    print("finished: ",end_time)
 
 
 

@@ -197,6 +197,10 @@ message ReportResponse {
   repeated Parameter parameter = 2;
 }
 
+message SimpleResponse {
+  string message = 1;
+}
+
 message InstructConfig {
   double round_timeout = 1;
   string model_id = 2;
@@ -209,13 +213,13 @@ message InstructConfig {
 }
 
 service Control {
-  rpc Start(ControlRequest) returns (ControlResponse);
+  rpc Start(ControlRequest) returns (stream SimpleResponse);
   rpc Stop(ControlRequest) returns (ControlResponse);
   rpc Configure(ControlRequest) returns (ReportResponse);  
   rpc Report(ControlRequest) returns (ReportResponse);
   rpc Instruct (InstructConfig) returns (ControlResponse);
-  rpc Book (ControlRequest) returns (ControlResponse);
-  rpc Availability (ControlRequest) returns (ControlResponse);
+  rpc Book (ControlRequest) returns (SimpleResponse);
+  rpc Availability (ControlRequest) returns (SimpleResponse);
 }
 
 service Reducer {

@@ -80,7 +80,7 @@ class FedAvgAggregator(AggregatorBase):
                            log_level=fedn.Status.INFO)
 
 
-    async def combine_models(self, nr_expected_models=None, nr_required_models=1, helper=None, timeout=180):
+    async def combine_models(self, nr_expected_models=None, nr_required_models=1, helper=None, timeout=380):
         """Compute a running average of model updates.
 
         :param nr_expected_models: The number of updates expected in this round, defaults to None

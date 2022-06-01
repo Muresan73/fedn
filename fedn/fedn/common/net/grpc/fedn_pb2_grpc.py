@@ -108,10 +108,10 @@ class ControlStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.Start = channel.unary_unary(
+        self.Start = channel.unary_stream(
                 '/grpc.Control/Start',
                 request_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
                 )
         self.Stop = channel.unary_unary(
                 '/grpc.Control/Stop',
@@ -136,12 +136,12 @@ class ControlStub(object):
         self.Book = channel.unary_unary(
                 '/grpc.Control/Book',
                 request_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
                 )
         self.Availability = channel.unary_unary(
                 '/grpc.Control/Availability',
                 request_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+                response_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
                 )
 
 
@@ -193,10 +193,10 @@ class ControlServicer(object):
 
 def add_ControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Start': grpc.unary_unary_rpc_method_handler(
+            'Start': grpc.unary_stream_rpc_method_handler(
                     servicer.Start,
                     request_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.FromString,
-                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.SerializeToString,
+                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.SerializeToString,
             ),
             'Stop': grpc.unary_unary_rpc_method_handler(
                     servicer.Stop,
@@ -221,12 +221,12 @@ def add_ControlServicer_to_server(servicer, server):
             'Book': grpc.unary_unary_rpc_method_handler(
                     servicer.Book,
                     request_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.FromString,
-                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.SerializeToString,
+                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.SerializeToString,
             ),
             'Availability': grpc.unary_unary_rpc_method_handler(
                     servicer.Availability,
                     request_deserializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.FromString,
-                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.SerializeToString,
+                    response_serializer=fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -249,9 +249,9 @@ class Control(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/grpc.Control/Start',
+        return grpc.experimental.unary_stream(request, target, '/grpc.Control/Start',
             fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -336,7 +336,7 @@ class Control(object):
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/grpc.Control/Book',
             fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -353,7 +353,7 @@ class Control(object):
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/grpc.Control/Availability',
             fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlRequest.SerializeToString,
-            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.ControlResponse.FromString,
+            fedn_dot_common_dot_net_dot_grpc_dot_fedn__pb2.SimpleResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 

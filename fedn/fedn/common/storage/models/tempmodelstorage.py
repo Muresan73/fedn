@@ -61,9 +61,9 @@ class TempModelStorage(ModelStorage):
         :param model_id:
         :return:
         """
-        try:
+        if model_id in self.models:
             f = self.models[model_id]['file']
-        except KeyError:
+        else:
             f = open(os.path.join(self.default_dir, str(model_id)), "wb")
 
         self.models[model_id] = {'file': f}

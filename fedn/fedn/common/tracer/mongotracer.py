@@ -35,7 +35,7 @@ class MongoTracer(Tracer):
         from google.protobuf.json_format import MessageToDict
         data = MessageToDict(msg, including_default_value_fields=True)
 
-        print("LOG: \n {} \n".format(data), flush=True)
+        # print("LOG: \n {} \n".format(data), flush=True)
 
         if self.status!=None:
             self.status.insert_one(data)

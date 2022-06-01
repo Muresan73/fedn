@@ -50,11 +50,18 @@ class CombinerNetwork(Network):
                 handle_unavailable_combiner(combiner_error.combiner)
 
     async def execute_training(self, combiners:List[CombinerInterface], compute_plan):
+        pending = len(combiners)
+        print('execute [{}] on {} combiners'.format(compute_plan['task'],pending))
+        print([c.name for c in combiners])
         for resp in asyncio.as_completed(map(lambda combiner: combiner.a_start(compute_plan), combiners)):
             try:
                 await resp
+                pending-= 1
+                print("witing for {} combnines to finish".format(pending))
             except CombinerUnavailableError as combiner_error:
                 handle_unavailable_combiner(combiner_error.combiner)
+        print('all training finished'.format(len(combiners)))
+
 
     async def get_out_of_sync_combiners(self)->List[CombinerInterface]:
         combiners = self.get_combiners()
@@ -106,6 +113,7 @@ async def supervise_round(config, round, network: CombinerNetwork):
 
 
         compute_plan = deepcopy(config)
+        compute_plan['commit_model'] = False
         compute_plan['rounds'] = 1
         compute_plan['round_id'] = round
         compute_plan['task'] = 'training'
@@ -129,6 +137,7 @@ async def supervise_round(config, round, network: CombinerNetwork):
         tracker_control.set_combiner_time()
 
         updated = await network.get_out_of_sync_combiners()
+        print("{} combiner updated out of {}".format(len(updated),len(participating_combiners)))
         check_round_validity_policy(updated)
 
         # ===========
@@ -140,16 +149,18 @@ async def supervise_round(config, round, network: CombinerNetwork):
         if data:
             round_meta['reduce'] = data
 
-        await commit_model(model, round_meta, helper, network.get_store())
+        if config['commit_model']:
+            print("Commiting model")
+            await commit_model(model, round_meta, helper, network.get_store())
 
-        # ===========
-        # validation
-        # ===========
+        # # ===========
+        # # validation
+        # # ===========
 
-        combiner_config = deepcopy(config)
-        combiner_config['model_id'] = network.get_latest_model()
-        combiner_config['task'] = 'validation'
-        await network.execute_training(participating_combiners, combiner_config)
+        # combiner_config = deepcopy(config)
+        # combiner_config['model_id'] = network.get_latest_model()
+        # combiner_config['task'] = 'validation'
+        # await network.execute_training(participating_combiners, combiner_config)
 
         tracker_control.set_round_meta(round_meta)
 
@@ -208,14 +219,21 @@ class RoundControl():
     #     return self._state == ReducerState.instructing
 
 
-    def start_with_plan(self, config):
+    def start_with_plan(self, config,reducer_name, loop=None):
         if not self._state == ReducerState.instructing:
             self._state = ReducerState.instructing
             try:
-                asyncio.run(execute_plan(config, self.network))
+                if loop:
+                    print('execute coroutine')
+                    asyncio.run_coroutine_threadsafe(execute_plan(config, self.network),loop).result()
+                else:
+                    print('execute standalone')
+                    asyncio.run(execute_plan(config, self.network))
             except:
                 print("plan execution failed")
             self._state = ReducerState.idle
+    def request_model_update(self,*args):
+        pass
 
 class StateStore():
     def __init__(self, statestore:MongoReducerStateStore):

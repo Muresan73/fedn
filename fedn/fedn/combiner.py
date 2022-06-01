@@ -1,3 +1,4 @@
+from email import message
 import os
 import queue
 import sys
@@ -115,7 +116,6 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'], store_name=self.id)
         # statestore = MongoReducerStateStore(config['statestore']['network_id'], config['statestore']['mongo_config'])
 
-        # from fedn.clients.reducer.control_saga.roundcontrol import RoundControl as ReducerRoundControl
         from fedn.clients.reducer.control_saga.treecontrol import TreeControl
         self.round_control = TreeControl(statestore,self)
 
@@ -157,8 +157,9 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         self.model_id = model_id
 
     def report_status(self, msg, log_level=fedn.Status.INFO, type=None, request=None, flush=True):
-        print("{}:COMBINER({}):{} {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), self.id, log_level, msg), flush=flush)
-
+        # print("{}:COMBINER({}):{} {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), self.id, log_level, msg), flush=flush)
+        pass
+    
     def request_model_update(self, model_id, clients=[]):
         """ Ask clients to update the current global model.
         
@@ -298,13 +299,12 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
     def _send_status(self, status):
 
         self.tracer.report(status)
-        for name, client in self.clients.items():
-            try:
+        for _, client in self.clients.items():
+            if fedn.Channel.STATUS in client:
                 q = client[fedn.Channel.STATUS]
                 status.timestamp = str(datetime.now())
                 q.put(status)
-            except KeyError:
-                pass
+
 
     def __register_heartbeat(self, client):
         """ Register a client if first time connecting. Update heartbeat timestamp. """
@@ -322,36 +322,35 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         :param context:
         :return:
         """
-        response = fedn.ControlResponse()
+        response = fedn.SimpleResponse()
         self.supervisor_status = Availability_Status.FREE
 
-        print("\n\n GOT CONTROL **START** from Command {}\n\n".format(control.command), flush=True)
+        print(" GOT CONTROL **START** from Command {}".format(control.command), flush=True)
 
         config = {}
         for parameter in control.parameter:
             config.update({parameter.key: parameter.value})
-        print("\n\nSTARTING ROUND AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
+        print("STARTING ROUND AT COMBINER WITH ROUND CONFIG: {}".format(config), flush=True)
+
+        yield fedn.SimpleResponse(message=f"{self.id}: Learning Started")
+
         import asyncio
         asyncio.run((self.control.push_round_config_async(config)))
-        return response
+        yield fedn.SimpleResponse(message=f"{self.id}: Learning Finished")
+
 
     def Instruct(self, request, context):
         print('instruction revecived')
         response = fedn.ControlResponse()
-        print("\n\n GOT CONTROL **Instruct** from Command {}\n\n", flush=True)
+        print(" GOT CONTROL **Instruct** from Command {}", flush=True)
 
         config = {k.name: v for k, v in request.ListFields()}
-        print("\n\nSTARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}\n\n".format(config), flush=True)
+        print("STARTING ROUND Instruct AT COMBINER WITH ROUND CONFIG: {}".format(config), flush=True)
 
         try:
             print('trainig is on')
-            self.supervisor_status = Availability_Status.BOOKED
-            self.round_control.build_supervisor_tree(reducer_name=self.id, loop=self.control.loop)
-            # self.round_control.build_supervisor_tree()
-            # Wait for leaf combiners to build the tree
-            from time import sleep
-            sleep(5)
-            self.round_control.start_with_plan(config, loop=self.control.loop)
+
+            self.round_control.start_with_plan(config, self.id, loop=self.control.loop)
             response.message = "**training completed**"
         except:
             print('itt valami nagy gebasz van')
@@ -384,14 +383,14 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         :return:
         """
         response = fedn.ControlResponse()
-        print("\n\n\n\n\n GOT CONTROL **STOP** from Command\n\n\n\n\n", flush=True)
+        print(" GOT CONTROL **STOP** from Command", flush=True)
         return response
 
     def Report(self, control: fedn.ControlRequest, context):
         """ Descibe current state of the Combiner. """
 
         response = fedn.ControlResponse()
-        print("\n\n\n\n\n GOT CONTROL **REPORT** from Command\n\n\n\n\n", flush=True)
+        print(" GOT CONTROL **REPORT** from Command", flush=True)
 
         active_trainers = self.get_active_trainers()
         p = response.parameter.add()
@@ -449,12 +448,12 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         """
 
         print('Booking attempt')
-        response = fedn.ControlResponse(message='ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
+        response = fedn.SimpleResponse(message='ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
         print('Message: ','ack' if self.supervisor_status is Availability_Status.FREE else 'declined')
 
         if self.supervisor_status is Availability_Status.FREE:
             self.supervisor_status = Availability_Status.BOOKED
-            self.round_control.build_supervisor_tree()
+            self.round_control.build_supervisor_tree(loop=self.control.loop)
 
 
 
@@ -468,7 +467,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         :return:
         """
         print('Availability requested')
-        response = fedn.ControlResponse(message=self.supervisor_status.value)
+        response = fedn.SimpleResponse(message=self.supervisor_status.value)
         return response  
 
     #####################################################################################################################
@@ -589,10 +588,8 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         self._send_status(status)
 
         while context.is_active():
-            try:
+            if not q.empty():
                 yield q.get(timeout=1.0)
-            except queue.Empty:
-                pass 
 
     def ModelUpdateRequestStream(self, response, context):
         """ A server stream RPC endpoint. Messages from client stream. """
@@ -600,7 +597,7 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         client = response.sender
         metadata = context.invocation_metadata()
         if metadata:
-            print("\n\n\nGOT METADATA: {}\n\n\n".format(metadata), flush=True)
+            print("GOT METADATA: {}".format(metadata), flush=True)
 
         status = fedn.Status(status="Client {} connecting to ModelUpdateRequestStream.".format(client.name))
         status.log_level = fedn.Status.INFO
@@ -615,11 +612,8 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         self._send_status(status)
 
         while context.is_active():
-            try:
+            if not q.empty():
                 yield q.get(timeout=1.0)
-            except queue.Empty:
-                pass 
-           
 
     def ModelValidationStream(self, update, context):
         """
@@ -640,10 +634,8 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         self._send_status(status)
 
         while context.is_active():
-            try:
+            if not q.empty():
                 yield q.get(timeout=1.0)
-            except queue.Empty:
-                pass 
 
     def ModelValidationRequestStream(self, response, context):
         """ A server stream RPC endpoint. Messages from client stream. """
@@ -662,10 +654,8 @@ class Combiner(rpc.CombinerServicer, rpc.ReducerServicer, rpc.ConnectorServicer,
         self._send_status(status)
 
         while context.is_active():
-            try:
+            if not q.empty():
                 yield q.get(timeout=1.0)
-            except queue.Empty:
-                pass 
 
     def SendModelUpdateRequest(self, request, context):
         """ Send a model update request. """
