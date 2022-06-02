@@ -116,7 +116,6 @@ async def supervise_round(config, round, network: CombinerNetwork):
         compute_plan['commit_model'] = False
         compute_plan['rounds'] = 1
         compute_plan['round_id'] = round
-        compute_plan['task'] = 'training'
         compute_plan['model_id'] = network.get_latest_model()
         compute_plan['helper_type'] = network.get_framework()
 

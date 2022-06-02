@@ -165,7 +165,8 @@ class RoundControl:
                     model = helper.increment_average(model, model_next, self.aggregator.nr_processed_models + 1)
                 else:
                     model = model_next
-
+            if model == None:
+                print('model aggregation error')
         except Exception as e:
             print("TRAINING ROUND FAILED AT COMBINER! {}".format(e), flush=True)
         meta['time_combination'] = time.time() - tic
